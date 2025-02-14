@@ -2,6 +2,8 @@ import streamlit as st
 from llama_index.llms.huggingface_api import HuggingFaceInferenceAPI
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import Settings  # 라마 인덱스의 환경 설정을 해주는 라이브러리 이것을 안하면 오픈API 를 사용한다.
+from huggingface_hub import snapshot_download
+from llama_index.core import StorageContext, load_index_from_storage
 
 import os
 
@@ -9,16 +11,25 @@ import os
 
 # ============================================= 임베드 셋팅 시작 ======================================================
 def get_huggingface_tonken() :
-    token=st.secrets.get('HUGGINGFACE_API_TOKEN')
+
+    # 실제 사용하는 서버에서 토큰을 불러오는 코드(실서버에서는 os 의 환경변수에셋팅된다)
+    # 그래서 환경변수를 읽어오는 코드로 작성해야 한다.
+    token = os.environ.get('HUGGINGFACE_API_TOKEN')
+    # 로컬에서 토큰을 불러오는 코드
+    if token is None :
+        token = st.secrets.get('HUGGINGFACE_API_TOKEN')
     return token
+# 전반적인 코드 설명 
+# 토큰은 환경변수에서 가져오면 된다, 만약 토큰이 환경변수에 없다면 로컬에서 가져와로 ( 로컬테스트 떄문)
+
 
 #모델 셋팅(라마)+ 토크나이저생성 함수
 @st.cache_resource    # 스트림릿아 매번 불러 오지 말고 한번 다운로드 받았으면 캐쉬에서 써라 (다운받아 써라 계속 다운 받지 말고)
 def initialize_models() :
     # 두개의 값은 허깅 페이스에서 받아올 예정이다.( 무료 모델 사용을 위해서 )
     model_name = "mistralai/Mistral-7B-Instruct-v0.2" # <<== 언어 모델 이름 (그나마 한국어 처리 잘 한다.)
-
     token = get_huggingface_tonken()
+    
     llm = HuggingFaceInferenceAPI(
         model_name = model_name,
         max_new_tokens = 512,
@@ -48,19 +59,53 @@ def initialize_models() :
     
 # ============================================= 임베드 셋팅 끝 ======================================================
 
+def get_index_from_huggingface() :
+    repo_id ="nhchoi1/manual-index"
+    local_dir = "./manual_index_storage"
+
+    token = get_huggingface_tonken()
+    snapshot_download(
+        repo_id = repo_id,
+        local_dir = local_dir,
+        repo_type = 'dataset',
+        token = token
+    )
+    # 다운로드한 폴더를 메모리에 올린다.
+    storage_context = StorageContext.from_defaults(persist_dir = local_dir)
+
+    index = load_index_from_storage(storage_context)
+    return index
+
+
 
 
 def main():
     # 1. 사용할 모델 셋팅 (아무것도 안해도 디폴트 값이 쳇 GPT 모델 )
     # 2. 사용할 토크나이저 셋팅 : embad_model   (아무것도 안해도 디폴트 값이 쳇 GPT 모델 )
-    # 3. PAG 에 필요한 인덱스 셋팅
-    # 4. 유저에게 프롬프트 입력 받아서 응답
     initialize_models()
+    # 3. PAG 에 필요한 인덱스 셋팅
+    index = get_index_from_huggingface()
+
+    
+    # 4. 유저에게 프롬프트 입력 받아서 응답
     # 함수를 만드면 테스트를 꼭 해봐라 ( 함수단위로 테스트 하는 것을 유닛 테스트 라고 한다.)
 
     st.title("PDF 문서 기반 질의 응답")
     st.text("선진기업 복지 업무 메뉴얼을 기반으로 질의응답을 제공 합니다.")
     # 이러한 과장들은 이력서나 면접을 볼때 꼭 이야기를 해야 한다.
+
+    query_engine = index.as_query_engine()
+
+    prompt = st.text_input("질문을 입력해주세요 : ")
+    if prompt :
+        with st.spinner( " 답변을 생성하고 있습니다... ") :
+            response = query_engine.query(prompt)
+            st.text('답변')
+            st.info(response.response)
+
+
+
+
 if __name__ == '__main__' :
     main()
     
